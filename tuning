@@ -1,0 +1,86 @@
+#!/usr/bin/env ruby
+
+Names = %w[a a# b c c# d d# e f f# g g#]
+Center = 69
+
+Mode = case
+when ARGV.delete('--midi')
+	if $stdout.tty?
+		$stderr.puts "Won't print MIDI bytes to the terminal!"
+		exit 1
+	end
+	:midi
+else
+	:manual
+end
+
+DeviceId = 0  # apparently ignored
+TuningSet = 0  # apparently ignored
+TuningName = 'USER SCALE 0'  # apparently ignored
+
+def name(noteNumber)
+	name = Names[(3+noteNumber) % 12]
+	oct = (noteNumber/12)-1
+	name + oct.to_s
+end
+
+def xor_checksum(data)
+	data.bytes.reduce(:^)
+end
+
+def to_3b(frac_note)
+	note = frac_note.floor
+	frac = frac_note - note
+	frac_14b = (frac * 0x4000).to_i
+	[note, frac_14b / 0x80, frac_14b % 0x80].pack('ccc')
+end
+
+def gen_equal_scale(center, cents_per)
+	# C1..C8 for minilogue
+	#(24..108).each do |n|
+	(0..127).map do |n|
+		[center*100 + (n - center)*cents_per, n]
+	end
+end
+
+Scales = {
+	'15tet' => gen_equal_scale(Center, 1200/15.0),
+	'19tet' => gen_equal_scale(Center, 1200/19.0),
+	'21tet' => gen_equal_scale(Center, 1200/21.0),
+	'23tet' => gen_equal_scale(Center, 1200/23.0),
+	'31tet' => gen_equal_scale(Center, 1200/31.0),
+	'53tet' => gen_equal_scale(Center, 1200/53.0),
+
+	'alpha' => gen_equal_scale(Center, 78.0),
+	'beta' => gen_equal_scale(Center, 63.8),
+	'gamma' => gen_equal_scale(Center, 35.1),
+}
+
+scale = Scales[ARGV[0]]
+if not scale
+	$stderr.puts "Usage: #{$0} <scale>"
+	$stderr.puts "  scales: " + Scales.keys.join(' ')
+	exit 1
+end
+
+case Mode
+when :manual
+	scale.each do |adj_cents, n|
+		adj_note = (adj_cents / 100).round
+		diff = adj_cents - (adj_note*100)
+		puts "#{n} #{name(n)} #{name(adj_note)} #{diff.round}"
+	end
+
+when :midi
+	data = "\xf0\x7e"
+	data << [DeviceId, 0x08, 0x01, TuningSet].pack('cccc')
+	data << TuningName.ljust(16, ' ')
+	scale.each do |adj_cents, n|
+		data << to_3b(adj_cents/100.0)
+	end
+
+	data << xor_checksum(data[1..])
+	data << "\xf7"
+	print data
+
+end
